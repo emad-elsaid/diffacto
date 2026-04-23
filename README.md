@@ -6,6 +6,7 @@ A beautiful terminal UI application for viewing git diffs with an interactive, c
 
 ## Features
 
+- **Auto-refresh**: Automatically updates when files change in your repository
 - **Split and Unified Views**: Switch between side-by-side split view and unified diff view
 - **Collapsible File Blocks**: Expand/collapse individual files or toggle all at once
 - **Keyboard Navigation**: Vim-style j/k navigation with intuitive shortcuts

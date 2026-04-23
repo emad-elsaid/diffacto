@@ -9,6 +9,7 @@ import {
   fg,
 } from "@opentui/core";
 import { $ } from "bun";
+import { watch } from "fs";
 
 // UI Constants
 const COLORS = {
@@ -58,6 +59,7 @@ const LAYOUT = {
   MIN_PADDING: 1,
   FOOTER_HEIGHT: 1,
   FOOTER_PADDING: 1,
+  WATCH_DEBOUNCE_MS: 200,
 } as const;
 
 const EXIT_CODE = {
@@ -148,7 +150,36 @@ async function main() {
     exitOnCtrlC: true,
   });
 
-  const files = await getGitDiff();
+  let files = await getGitDiff();
+  let blocks: FileBlock[] = files.map((file) => ({ file, isOpen: true }));
+  let cursor = 0;
+  let scrollBox: ScrollBoxRenderable | null = null;
+  let footer: BoxRenderable | null = null;
+  let diffViewMode: "unified" | "split" = "unified";
+  let refreshTimeout: Timer | null = null;
+
+  async function refreshDiff() {
+    const newFiles = await getGitDiff();
+    
+    // Preserve cursor position and open/close states where possible
+    const oldFilenames = new Map(blocks.map((b, i) => [b.file.filename, { index: i, isOpen: b.isOpen }]));
+    
+    files = newFiles;
+    blocks = newFiles.map((file) => {
+      const oldState = oldFilenames.get(file.filename);
+      return {
+        file,
+        isOpen: oldState?.isOpen ?? true,
+      };
+    });
+
+    // Adjust cursor if it's out of bounds
+    if (cursor >= blocks.length) {
+      cursor = Math.max(0, blocks.length - 1);
+    }
+
+    render();
+  }
 
   if (files.length === 0) {
     const container = new BoxRenderable(renderer, {
@@ -165,13 +196,6 @@ async function main() {
     renderer.root.add(container);
     return;
   }
-
-  const blocks: FileBlock[] = files.map((file) => ({ file, isOpen: true }));
-  let cursor = 0;
-  let scrollBox: ScrollBoxRenderable | null = null;
-  let footer: BoxRenderable | null = null;
-
-  let diffViewMode: "unified" | "split" = "unified";
 
   function render() {
     if (scrollBox) {
@@ -328,6 +352,24 @@ async function main() {
       diffViewMode = "split";
       render();
     }
+  });
+
+  // Watch for file changes in the current directory
+  const gitDir = ".git";
+  const watcher = watch(".", { recursive: true }, (eventType, filename) => {
+    // Debounce rapid file changes
+    if (refreshTimeout) {
+      clearTimeout(refreshTimeout);
+    }
+    
+    refreshTimeout = setTimeout(() => {
+      refreshDiff();
+    }, LAYOUT.WATCH_DEBOUNCE_MS);
+  });
+
+  // Cleanup on exit
+  process.on("beforeExit", () => {
+    watcher.close();
   });
 }
 
