@@ -18,6 +18,8 @@ const COLORS = {
   MUTED: "#888888",
   HEADER_BG: "#1a1a1a",
   HEADER_BG_SELECTED: "#2a2a2a",
+  FOOTER_BG: "#1a1a1a",
+  FOOTER_FG: "#888888",
 } as const;
 
 const DIFF_COLORS = {
@@ -54,6 +56,8 @@ const LAYOUT = {
   EMPTY_STATE_PADDING: 2,
   SPACER_HEIGHT: 1,
   MIN_PADDING: 1,
+  FOOTER_HEIGHT: 1,
+  FOOTER_PADDING: 1,
 } as const;
 
 const EXIT_CODE = {
@@ -165,6 +169,8 @@ async function main() {
   const blocks: FileBlock[] = files.map((file) => ({ file, isOpen: true }));
   let cursor = 0;
   let scrollBox: ScrollBoxRenderable | null = null;
+  let footer: BoxRenderable | null = null;
+
   let diffViewMode: "unified" | "split" = "split";
 
   function render() {
@@ -249,23 +255,36 @@ async function main() {
       }
     }
 
-    const spacer = new BoxRenderable(renderer, { id: "spacer", height: LAYOUT.SPACER_HEIGHT });
-    const helpText = new TextRenderable(renderer, {
-      id: "help",
-      content: " j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  q: quit",
-      fg: COLORS.MUTED,
-    });
-
-    contentContainer.add(spacer, helpText);
-
     scrollBox = new ScrollBoxRenderable(renderer, {
       id: "scroll-container",
       width: "100%",
-      height: "100%",
+      height: renderer.height - LAYOUT.FOOTER_HEIGHT,
     });
 
     scrollBox.add(contentContainer);
     renderer.root.add(scrollBox);
+
+    if (footer) {
+      footer.destroy();
+    }
+
+    footer = new BoxRenderable(renderer, {
+      id: "footer",
+      width: "100%",
+      height: LAYOUT.FOOTER_HEIGHT,
+      backgroundColor: COLORS.FOOTER_BG,
+      padding: [0, LAYOUT.FOOTER_PADDING],
+      y: renderer.height - LAYOUT.FOOTER_HEIGHT,
+    });
+
+    const footerText = new TextRenderable(renderer, {
+      id: "footer-text",
+      content: " j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  q: quit",
+      fg: COLORS.FOOTER_FG,
+    });
+
+    footer.add(footerText);
+    renderer.root.add(footer);
   }
 
   render();
