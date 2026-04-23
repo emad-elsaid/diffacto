@@ -171,7 +171,7 @@ async function main() {
   let scrollBox: ScrollBoxRenderable | null = null;
   let footer: BoxRenderable | null = null;
 
-  let diffViewMode: "unified" | "split" = "split";
+  let diffViewMode: "unified" | "split" = "unified";
 
   function render() {
     if (scrollBox) {
