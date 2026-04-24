@@ -117,7 +117,8 @@ const GIT_MARKERS = {
 
 const LAYOUT = {
   DIFF_CONTEXT_LINES: 3,
-  HEADER_PADDING: [0, 1] as [number, number],
+  HEADER_PADDING_Y: 0,
+  HEADER_PADDING_X: 1,
   BOX_PADDING_TOTAL: 2,
   PADDING_ADJUSTMENT: 1,
   EMPTY_STATE_PADDING: 2,
@@ -209,7 +210,7 @@ function parseDiff(diffText: string): FileDiff[] {
   for (const block of fileBlocks) {
     const fullBlock = GIT_MARKERS.DIFF_PREFIX + block;
     const lines = fullBlock.split("\n");
-    const match = lines[0].match(/diff --git a\/(.*?) b\/(.*?)$/);
+    const match = lines.at(0)?.match(/diff --git a\/(.*?) b\/(.*?)$/);
     if (!match) continue;
 
     let status: "modified" | "added" | "deleted" = "modified";
@@ -223,7 +224,7 @@ function parseDiff(diffText: string): FileDiff[] {
       if (line.startsWith(GIT_MARKERS.DELETION_LINE) && !line.startsWith(GIT_MARKERS.DELETION_HEADER)) deletions++;
     }
 
-    files.push({ filename: match[2], status, additions, deletions, rawDiff: fullBlock });
+    files.push({ filename: match[2]!, status, additions, deletions, rawDiff: fullBlock });
   }
 
   return files;
@@ -271,7 +272,7 @@ async function detectRenames(files: FileDiff[]): Promise<FileDiff[]> {
   const claimedAdded = new Set<FileDiff>();
 
   for (const del of deleted) {
-    let bestScore = LAYOUT.RENAME_THRESHOLD;
+    let bestScore: number = LAYOUT.RENAME_THRESHOLD;
     let bestMatch: FileDiff | null = null;
     for (const add of added) {
       if (claimedAdded.has(add)) continue;
@@ -426,10 +427,11 @@ async function main() {
       width: "100%",
       flexDirection: "row",
       backgroundColor: headerBg,
-      padding: LAYOUT.HEADER_PADDING,
+      paddingY: LAYOUT.HEADER_PADDING_Y,
+      paddingX: LAYOUT.HEADER_PADDING_X,
       onMouseDown: () => {
         state.cursor = index;
-        state.blocks[index].isOpen = !state.blocks[index].isOpen;
+        state.blocks[index]!.isOpen = !state.blocks[index]!.isOpen;
         render();
       },
     });
@@ -479,8 +481,9 @@ async function main() {
       width: "100%",
       height: LAYOUT.FOOTER_HEIGHT,
       backgroundColor: COLORS.FOOTER_BG,
-      padding: [0, LAYOUT.FOOTER_PADDING],
-      y: renderer.height - LAYOUT.FOOTER_HEIGHT,
+      paddingX: LAYOUT.FOOTER_PADDING,
+      position: "absolute",
+      bottom: 0,
     });
 
     const followIndicator = state.followMode ? fg(COLORS.ADDED)("FOLLOW") : fg(COLORS.MUTED)("follow");
@@ -504,7 +507,7 @@ async function main() {
     });
 
     for (let i = 0; i < state.blocks.length; i++) {
-      renderFileBlock(contentContainer, state.blocks[i], i);
+      renderFileBlock(contentContainer, state.blocks[i]!, i);
     }
 
     scrollBox = new ScrollBoxRenderable(renderer, {
@@ -550,7 +553,7 @@ async function main() {
     const changedIndices = state.followMode
       ? newFiles.reduce<number[]>((acc, file, i) => {
           if (oldState.get(file.filename)?.rawDiff !== file.rawDiff) {
-            state.blocks[i].isOpen = true;
+            state.blocks[i]!.isOpen = true;
             acc.push(i);
           }
           return acc;
@@ -581,7 +584,7 @@ async function main() {
     } else {
       render();
       if (state.followMode && changedIndices.length > 0 && scrollBox) {
-        const lastIdx = changedIndices[changedIndices.length - 1];
+        const lastIdx = changedIndices.at(-1)!;
         scrollBox.scrollChildIntoView(`header-${lastIdx}`);
         state.cursor = lastIdx;
       }
@@ -601,18 +604,18 @@ async function main() {
       state.cursor = Math.max(0, state.cursor - 1);
       render();
     },
-    k: () => keyHandlers.up({} as KeyEvent),
+    k: () => keyHandlers["up"]?.({} as KeyEvent),
     down: () => {
       state.cursor = Math.min(state.blocks.length - 1, state.cursor + 1);
       render();
     },
-    j: () => keyHandlers.down({} as KeyEvent),
+    j: () => keyHandlers["down"]?.({} as KeyEvent),
     tab: (key) => {
       if (key.shift) {
-        const targetState = !state.blocks[state.cursor].isOpen;
+        const targetState = !state.blocks[state.cursor]!.isOpen;
         state.blocks.forEach((block) => (block.isOpen = targetState));
       } else {
-        state.blocks[state.cursor].isOpen = !state.blocks[state.cursor].isOpen;
+        state.blocks[state.cursor]!.isOpen = !state.blocks[state.cursor]!.isOpen;
       }
       render();
     },

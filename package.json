@@ -3,6 +3,9 @@
   "module": "diffacto",
   "type": "module",
   "private": true,
+  "scripts": {
+    "typecheck": "cp diffacto diffacto.ts && bunx tsc --project tsconfig.typecheck.json; CODE=$?; rm -f diffacto.ts; exit $CODE"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
