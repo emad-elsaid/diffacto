@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import {
   createCliRenderer,
-  BoxRenderable, 
-  TextRenderable, 
-  DiffRenderable, 
+  BoxRenderable,
+  TextRenderable,
+  DiffRenderable,
   ScrollBoxRenderable,
   type KeyEvent,
   t,
@@ -12,7 +12,10 @@ import {
 import { $ } from "bun";
 import { watch } from "fs";
 
-// UI Constants
+// =============================================================================
+// Constants
+// =============================================================================
+
 const COLORS = {
   ADDED: "#00ff00",
   DELETED: "#ff0000",
@@ -34,10 +37,7 @@ const DIFF_COLORS = {
   CONTENT_FG: "#000000",
 } as const;
 
-const SYMBOLS = {
-  ARROW_CLOSED: "▶",
-  ARROW_OPEN: "▼",
-} as const;
+const SYMBOLS = { ARROW_CLOSED: "▶", ARROW_OPEN: "▼" } as const;
 
 const GIT_MARKERS = {
   DIFF_PREFIX: "diff --git ",
@@ -51,13 +51,10 @@ const GIT_MARKERS = {
 
 const LAYOUT = {
   DIFF_CONTEXT_LINES: 3,
-  DIFF_VIEW_HEIGHT: 20,
-  HEADER_PADDING_VERTICAL: 0,
-  HEADER_PADDING_HORIZONTAL: 1,
-  BOX_PADDING_HORIZONTAL_TOTAL: 2, // 1 on each side
-  PADDING_ADJUSTMENT: 1, // Fine-tune alignment
+  HEADER_PADDING: [0, 1] as [number, number],
+  BOX_PADDING_TOTAL: 2,
+  PADDING_ADJUSTMENT: 1,
   EMPTY_STATE_PADDING: 2,
-  SPACER_HEIGHT: 1,
   MIN_PADDING: 1,
   FOOTER_HEIGHT: 1,
   FOOTER_PADDING: 1,
@@ -65,9 +62,9 @@ const LAYOUT = {
   RENAME_THRESHOLD: 0.6,
 } as const;
 
-const EXIT_CODE = {
-  SUCCESS: 0,
-} as const;
+// =============================================================================
+// Types
+// =============================================================================
 
 interface FileDiff {
   filename: string;
@@ -83,19 +80,60 @@ interface FileBlock {
   isOpen: boolean;
 }
 
+interface AppState {
+  files: FileDiff[];
+  blocks: FileBlock[];
+  cursor: number;
+  diffViewMode: "unified" | "split";
+  followMode: boolean;
+}
+
+// =============================================================================
+// Git Operations
+// =============================================================================
+
+function parseDiff(diffText: string): FileDiff[] {
+  const files: FileDiff[] = [];
+  const fileBlocks = diffText.split(new RegExp(`^${GIT_MARKERS.DIFF_PREFIX}`, "m")).filter(Boolean);
+
+  for (const block of fileBlocks) {
+    const fullBlock = GIT_MARKERS.DIFF_PREFIX + block;
+    const lines = fullBlock.split("\n");
+    const match = lines[0].match(/diff --git a\/(.*?) b\/(.*?)$/);
+    if (!match) continue;
+
+    let status: "modified" | "added" | "deleted" = "modified";
+    let additions = 0;
+    let deletions = 0;
+
+    for (const line of lines) {
+      if (line.startsWith(GIT_MARKERS.NEW_FILE)) status = "added";
+      if (line.startsWith(GIT_MARKERS.DELETED_FILE)) status = "deleted";
+      if (line.startsWith(GIT_MARKERS.ADDITION_LINE) && !line.startsWith(GIT_MARKERS.ADDITION_HEADER)) additions++;
+      if (line.startsWith(GIT_MARKERS.DELETION_LINE) && !line.startsWith(GIT_MARKERS.DELETION_HEADER)) deletions++;
+    }
+
+    files.push({ filename: match[2], status, additions, deletions, rawDiff: fullBlock });
+  }
+
+  return files;
+}
+
 function contentLines(rawDiff: string): Set<string> {
   return new Set(
-    rawDiff.split("\n")
-      .filter(l => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---"))
-      .map(l => l.slice(1))
+    rawDiff
+      .split("\n")
+      .filter((l) => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---"))
+      .map((l) => l.slice(1))
   );
 }
 
 function fileSimilarity(rawDiffA: string, rawDiffB: string): number {
   const a = contentLines(rawDiffA);
   const b = contentLines(rawDiffB);
-  const intersection = [...a].filter(l => b.has(l)).length;
-  return intersection / (a.size + b.size - intersection);
+  const intersection = [...a].filter((l) => b.has(l)).length;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 async function getRenamedDiff(delFilename: string, addFilename: string): Promise<string> {
@@ -104,10 +142,10 @@ async function getRenamedDiff(delFilename: string, addFilename: string): Promise
     const tmpPath = `/tmp/_diffacto_old_${Date.now()}`;
     await Bun.write(tmpPath, oldContent);
     try {
-      let diff = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} ${tmpPath} ${addFilename}`.nothrow().text();
-      // Replace temp path with real filename so the diff header reads correctly
-      diff = diff.replaceAll(tmpPath.slice(1), delFilename);
-      return diff;
+      let diff = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} ${tmpPath} ${addFilename}`
+        .nothrow()
+        .text();
+      return diff.replaceAll(tmpPath.slice(1), delFilename);
     } finally {
       await $`rm -f ${tmpPath}`.nothrow();
     }
@@ -117,10 +155,9 @@ async function getRenamedDiff(delFilename: string, addFilename: string): Promise
 }
 
 async function detectRenames(files: FileDiff[]): Promise<FileDiff[]> {
-  const deleted = files.filter(f => f.status === "deleted");
-  const added = files.filter(f => f.status === "added");
-
-  const renamedPairs = new Map<FileDiff, FileDiff>(); // deleted -> added
+  const deleted = files.filter((f) => f.status === "deleted");
+  const added = files.filter((f) => f.status === "added");
+  const renamedPairs = new Map<FileDiff, FileDiff>();
   const claimedAdded = new Set<FileDiff>();
 
   for (const del of deleted) {
@@ -160,7 +197,7 @@ async function detectRenames(files: FileDiff[]): Promise<FileDiff[]> {
     });
   }
 
-  return [...files.filter(f => !suppressed.has(f)), ...renamed];
+  return [...files.filter((f) => !suppressed.has(f)), ...renamed];
 }
 
 async function getUntrackedDiffs(): Promise<FileDiff[]> {
@@ -168,14 +205,15 @@ async function getUntrackedDiffs(): Promise<FileDiff[]> {
     const statusOutput = await $`git status --porcelain`.text();
     const untracked = statusOutput
       .split("\n")
-      .filter(line => line.startsWith("?? "))
-      .map(line => line.slice(3).trim())
+      .filter((line) => line.startsWith("?? "))
+      .map((line) => line.slice(3).trim())
       .filter(Boolean);
 
     const results: FileDiff[] = [];
     for (const file of untracked) {
-      // .nothrow() prevents Bun from throwing on exit code 1 (which git diff --no-index uses to signal differences)
-      const diffOutput = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} /dev/null ${file}`.nothrow().text();
+      const diffOutput = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} /dev/null ${file}`
+        .nothrow()
+        .text();
       if (diffOutput) results.push(...parseDiff(diffOutput));
     }
     return results;
@@ -194,7 +232,6 @@ async function getGitDiff(): Promise<FileDiff[]> {
 
     const stagedFiles = stagedOutput ? parseDiff(stagedOutput) : [];
     const unstagedFiles = unstagedOutput ? parseDiff(unstagedOutput) : [];
-
     const fileMap = new Map<string, FileDiff>();
 
     for (const file of [...stagedFiles, ...unstagedFiles, ...untrackedFiles]) {
@@ -209,84 +246,187 @@ async function getGitDiff(): Promise<FileDiff[]> {
     }
 
     return await detectRenames(Array.from(fileMap.values()));
-  } catch (error) {
+  } catch {
     return [];
   }
 }
 
-function parseDiff(diffText: string): FileDiff[] {
-  const files: FileDiff[] = [];
-  const fileBlocks = diffText.split(new RegExp(`^${GIT_MARKERS.DIFF_PREFIX}`, 'm')).filter(Boolean);
+// =============================================================================
+// UI Helpers
+// =============================================================================
 
-  for (const block of fileBlocks) {
-    const fullBlock = GIT_MARKERS.DIFF_PREFIX + block;
-    const lines = fullBlock.split("\n");
-    
-    const firstLine = lines[0];
-    const match = firstLine.match(/diff --git a\/(.*?) b\/(.*?)$/);
-    if (!match) continue;
-
-    const filename = match[2];
-    let status: "modified" | "added" | "deleted" = "modified";
-    let additions = 0;
-    let deletions = 0;
-
-    for (const line of lines) {
-      if (line.startsWith(GIT_MARKERS.NEW_FILE)) status = "added";
-      if (line.startsWith(GIT_MARKERS.DELETED_FILE)) status = "deleted";
-      if (line.startsWith(GIT_MARKERS.ADDITION_LINE) && !line.startsWith(GIT_MARKERS.ADDITION_HEADER)) additions++;
-      if (line.startsWith(GIT_MARKERS.DELETION_LINE) && !line.startsWith(GIT_MARKERS.DELETION_HEADER)) deletions++;
-    }
-
-    files.push({
-      filename,
-      status,
-      additions,
-      deletions,
-      rawDiff: fullBlock,
-    });
+function getStatusColor(status: FileDiff["status"]): string {
+  switch (status) {
+    case "added":
+      return COLORS.ADDED;
+    case "deleted":
+      return COLORS.DELETED;
+    case "renamed":
+      return COLORS.RENAMED;
+    default:
+      return COLORS.MODIFIED;
   }
-
-  return files;
 }
 
-async function main() {
-  const renderer = await createCliRenderer({
-    exitOnCtrlC: true,
-  });
+function getFileLabel(file: FileDiff): string {
+  return file.renamedFrom ? `${file.renamedFrom} → ${file.filename}` : file.filename;
+}
 
-  let files = await getGitDiff();
-  let blocks: FileBlock[] = files.map((file) => ({ file, isOpen: true }));
-  let cursor = 0;
+// =============================================================================
+// Main Application
+// =============================================================================
+
+async function main() {
+  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  const state: AppState = {
+    files: await getGitDiff(),
+    blocks: [],
+    cursor: 0,
+    diffViewMode: "unified",
+    followMode: true,
+  };
+  state.blocks = state.files.map((file) => ({ file, isOpen: true }));
+
   let scrollBox: ScrollBoxRenderable | null = null;
   let footer: BoxRenderable | null = null;
-  let diffViewMode: "unified" | "split" = "unified";
-  let followMode = true;
   let refreshTimeout: Timer | null = null;
+
+  // ---------------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------------
+
+  function renderFileBlock(container: BoxRenderable, block: FileBlock, index: number) {
+    const isCursor = index === state.cursor;
+    const arrow = block.isOpen ? SYMBOLS.ARROW_OPEN : SYMBOLS.ARROW_CLOSED;
+    const statusColor = getStatusColor(block.file.status);
+    const headerBg = isCursor ? COLORS.HEADER_BG_SELECTED : COLORS.HEADER_BG;
+
+    const fileLabel = getFileLabel(block.file);
+    const leftPart = `${arrow} ${fileLabel}`;
+    const additions = `+${block.file.additions}`;
+    const deletions = `-${block.file.deletions}`;
+    const statsText = `${additions} ${deletions}`;
+    const padding = Math.max(
+      LAYOUT.MIN_PADDING,
+      renderer.width - LAYOUT.BOX_PADDING_TOTAL - leftPart.length - statsText.length
+    ) + LAYOUT.PADDING_ADJUSTMENT;
+
+    const headerBox = new BoxRenderable(renderer, {
+      id: `header-${index}`,
+      width: "100%",
+      flexDirection: "row",
+      backgroundColor: headerBg,
+      padding: LAYOUT.HEADER_PADDING,
+      onMouseDown: () => {
+        state.cursor = index;
+        state.blocks[index].isOpen = !state.blocks[index].isOpen;
+        render();
+      },
+    });
+
+    const headerText = new TextRenderable(renderer, {
+      id: `text-${index}`,
+      content: t`${fg(statusColor)(leftPart)}${" ".repeat(padding)}${fg(COLORS.ADDED)(additions)} ${fg(COLORS.DELETED)(deletions)}`,
+    });
+
+    headerBox.add(headerText);
+    container.add(headerBox);
+
+    if (block.isOpen) {
+      const diffLines = block.file.rawDiff.split("\n").length;
+      const diffView = new DiffRenderable(renderer, {
+        id: `diff-${index}`,
+        width: "100%",
+        height: diffLines,
+        diff: block.file.rawDiff,
+        view: state.diffViewMode,
+        showLineNumbers: true,
+        syncScroll: true,
+        fg: DIFF_COLORS.CONTENT_FG,
+        addedBg: DIFF_COLORS.ADDED_BG,
+        removedBg: DIFF_COLORS.REMOVED_BG,
+        addedSignColor: DIFF_COLORS.ADDED_SIGN,
+        removedSignColor: DIFF_COLORS.REMOVED_SIGN,
+        lineNumberFg: DIFF_COLORS.LINE_NUMBER_FG,
+        onMouseDown: () => {
+          state.cursor = index;
+          render();
+        },
+      });
+      container.add(diffView);
+    }
+  }
+
+  function renderFooter() {
+    if (footer) footer.destroy();
+
+    footer = new BoxRenderable(renderer, {
+      id: "footer",
+      width: "100%",
+      height: LAYOUT.FOOTER_HEIGHT,
+      backgroundColor: COLORS.FOOTER_BG,
+      padding: [0, LAYOUT.FOOTER_PADDING],
+      y: renderer.height - LAYOUT.FOOTER_HEIGHT,
+    });
+
+    const followIndicator = state.followMode ? fg(COLORS.ADDED)("FOLLOW") : fg(COLORS.MUTED)("follow");
+    const footerText = new TextRenderable(renderer, {
+      id: "footer-text",
+      content: t`${fg(COLORS.FOOTER_FG)(" j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  f: ")}${followIndicator}${fg(COLORS.FOOTER_FG)("  q: quit")}`,
+    });
+
+    footer.add(footerText);
+    renderer.root.add(footer);
+  }
+
+  function render() {
+    const prevScrollTop = scrollBox?.scrollTop ?? 0;
+    if (scrollBox) scrollBox.destroy();
+
+    const contentContainer = new BoxRenderable(renderer, {
+      id: "content-container",
+      width: "100%",
+      flexDirection: "column",
+    });
+
+    for (let i = 0; i < state.blocks.length; i++) {
+      renderFileBlock(contentContainer, state.blocks[i], i);
+    }
+
+    scrollBox = new ScrollBoxRenderable(renderer, {
+      id: "scroll-container",
+      width: "100%",
+      height: renderer.height - LAYOUT.FOOTER_HEIGHT,
+    });
+
+    scrollBox.add(contentContainer);
+    renderer.root.add(scrollBox);
+    scrollBox.scrollTop = prevScrollTop;
+    renderFooter();
+  }
+
+  // ---------------------------------------------------------------------------
+  // State Updates
+  // ---------------------------------------------------------------------------
 
   async function refreshDiff() {
     const newFiles = await getGitDiff();
+    const oldState = new Map(state.blocks.map((b) => [b.file.filename, { rawDiff: b.file.rawDiff, isOpen: b.isOpen }]));
 
-    const oldState = new Map(blocks.map(b => [b.file.filename, b.file.rawDiff]));
+    state.files = newFiles;
+    state.blocks = newFiles.map((file) => ({
+      file,
+      isOpen: oldState.get(file.filename)?.isOpen ?? true,
+    }));
 
-    files = newFiles;
-    blocks = newFiles.map((file) => {
-      const prev = oldState.get(file.filename);
-      return {
-        file,
-        isOpen: prev !== undefined ? (blocks.find(b => b.file.filename === file.filename)?.isOpen ?? true) : true,
-      };
-    });
-
-    if (cursor >= blocks.length) {
-      cursor = Math.max(0, blocks.length - 1);
+    if (state.cursor >= state.blocks.length) {
+      state.cursor = Math.max(0, state.blocks.length - 1);
     }
 
-    // Find changed/new files for follow mode before re-render
-    const changedIndices = followMode
+    const changedIndices = state.followMode
       ? newFiles.reduce<number[]>((acc, file, i) => {
-          if (oldState.get(file.filename) !== file.rawDiff) {
-            blocks[i].isOpen = true;
+          if (oldState.get(file.filename)?.rawDiff !== file.rawDiff) {
+            state.blocks[i].isOpen = true;
             acc.push(i);
           }
           return acc;
@@ -295,14 +435,60 @@ async function main() {
 
     render();
 
-    if (followMode && changedIndices.length > 0 && scrollBox) {
+    if (state.followMode && changedIndices.length > 0 && scrollBox) {
       const lastIdx = changedIndices[changedIndices.length - 1];
       scrollBox.scrollChildIntoView(`header-${lastIdx}`);
-      cursor = lastIdx;
+      state.cursor = lastIdx;
     }
   }
 
-  if (files.length === 0) {
+  // ---------------------------------------------------------------------------
+  // Input Handling
+  // ---------------------------------------------------------------------------
+
+  const keyHandlers: Record<string, (key: KeyEvent) => void> = {
+    q: () => {
+      renderer.destroy();
+      process.exit(0);
+    },
+    up: () => {
+      state.cursor = Math.max(0, state.cursor - 1);
+      render();
+    },
+    k: () => keyHandlers.up({} as KeyEvent),
+    down: () => {
+      state.cursor = Math.min(state.blocks.length - 1, state.cursor + 1);
+      render();
+    },
+    j: () => keyHandlers.down({} as KeyEvent),
+    tab: (key) => {
+      if (key.shift) {
+        const targetState = !state.blocks[state.cursor].isOpen;
+        state.blocks.forEach((block) => (block.isOpen = targetState));
+      } else {
+        state.blocks[state.cursor].isOpen = !state.blocks[state.cursor].isOpen;
+      }
+      render();
+    },
+    "1": () => {
+      state.diffViewMode = "unified";
+      render();
+    },
+    "2": () => {
+      state.diffViewMode = "split";
+      render();
+    },
+    f: () => {
+      state.followMode = !state.followMode;
+      render();
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Initialization
+  // ---------------------------------------------------------------------------
+
+  if (state.files.length === 0) {
     const container = new BoxRenderable(renderer, {
       id: "empty",
       padding: LAYOUT.EMPTY_STATE_PADDING,
@@ -318,188 +504,19 @@ async function main() {
     return;
   }
 
-  function render() {
-    if (scrollBox) {
-      scrollBox.destroy();
-    }
-
-    const contentContainer = new BoxRenderable(renderer, {
-      id: "content-container",
-      width: "100%",
-      flexDirection: "column",
-    });
-
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      const isCursor = i === cursor;
-      const arrow = block.isOpen ? SYMBOLS.ARROW_OPEN : SYMBOLS.ARROW_CLOSED;
-      const statusColor =
-        block.file.status === "added" ? COLORS.ADDED :
-        block.file.status === "deleted" ? COLORS.DELETED :
-        block.file.status === "renamed" ? COLORS.RENAMED :
-        COLORS.MODIFIED;
-
-      const headerBg = isCursor ? COLORS.HEADER_BG_SELECTED : COLORS.HEADER_BG;
-
-      const termWidth = renderer.width;
-      const fileLabel = block.file.renamedFrom
-        ? `${block.file.renamedFrom} → ${block.file.filename}`
-        : block.file.filename;
-      const leftPart = `${arrow} ${fileLabel}`;
-      const additions = `+${block.file.additions}`;
-      const deletions = `-${block.file.deletions}`;
-      const statsText = `${additions} ${deletions}`;
-      const padding = Math.max(
-        LAYOUT.MIN_PADDING, 
-        termWidth - LAYOUT.BOX_PADDING_HORIZONTAL_TOTAL - leftPart.length - statsText.length
-      ) + LAYOUT.PADDING_ADJUSTMENT;
-      
-      const headerBox = new BoxRenderable(renderer, {
-        id: `header-${i}`,
-        width: "100%",
-        flexDirection: "row",
-        backgroundColor: headerBg,
-        padding: [LAYOUT.HEADER_PADDING_VERTICAL, LAYOUT.HEADER_PADDING_HORIZONTAL],
-        onMouseDown: () => {
-          cursor = i;
-          blocks[i].isOpen = !blocks[i].isOpen;
-          render();
-        },
-      });
-
-      const headerText = new TextRenderable(renderer, { 
-        id: `text-${i}`, 
-        content: t`${fg(statusColor)(`${leftPart}`)}${" ".repeat(padding)}${fg(COLORS.ADDED)(additions)} ${fg(COLORS.DELETED)(deletions)}`,
-      });
-
-      headerBox.add(headerText);
-      contentContainer.add(headerBox);
-
-      if (block.isOpen) {
-        // Calculate actual height needed for the diff (count lines in the diff)
-        const diffLines = block.file.rawDiff.split("\n").length;
-        
-        const diffView = new DiffRenderable(renderer, {
-          id: `diff-${i}`,
-          width: "100%",
-          height: diffLines,
-          diff: block.file.rawDiff,
-          view: diffViewMode,
-          showLineNumbers: true,
-          syncScroll: true,
-          fg: DIFF_COLORS.CONTENT_FG,
-          addedBg: DIFF_COLORS.ADDED_BG,
-          removedBg: DIFF_COLORS.REMOVED_BG,
-          addedSignColor: DIFF_COLORS.ADDED_SIGN,
-          removedSignColor: DIFF_COLORS.REMOVED_SIGN,
-          lineNumberFg: DIFF_COLORS.LINE_NUMBER_FG,
-          onMouseDown: () => {
-            cursor = i;
-            render();
-          },
-        });
-        
-        contentContainer.add(diffView);
-      }
-    }
-
-    scrollBox = new ScrollBoxRenderable(renderer, {
-      id: "scroll-container",
-      width: "100%",
-      height: renderer.height - LAYOUT.FOOTER_HEIGHT,
-    });
-
-    scrollBox.add(contentContainer);
-    renderer.root.add(scrollBox);
-
-    if (footer) {
-      footer.destroy();
-    }
-
-    footer = new BoxRenderable(renderer, {
-      id: "footer",
-      width: "100%",
-      height: LAYOUT.FOOTER_HEIGHT,
-      backgroundColor: COLORS.FOOTER_BG,
-      padding: [0, LAYOUT.FOOTER_PADDING],
-      y: renderer.height - LAYOUT.FOOTER_HEIGHT,
-    });
-
-    const followIndicator = followMode ? fg(COLORS.ADDED)("FOLLOW") : fg(COLORS.MUTED)("follow");
-    const footerText = new TextRenderable(renderer, {
-      id: "footer-text",
-      content: t`${fg(COLORS.FOOTER_FG)(" j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  f: ")}${followIndicator}${fg(COLORS.FOOTER_FG)("  q: quit")}`,
-    });
-
-    footer.add(footerText);
-    renderer.root.add(footer);
-  }
-
   render();
 
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
-    if (key.name === "q") {
-      renderer.destroy();
-      process.exit(EXIT_CODE.SUCCESS);
-    }
-
-    if (key.name === "up" || key.name === "k") {
-      cursor = Math.max(0, cursor - 1);
-      render();
-    }
-
-    if (key.name === "down" || key.name === "j") {
-      cursor = Math.min(blocks.length - 1, cursor + 1);
-      render();
-    }
-
-    if (key.name === "tab") {
-      if (key.shift) {
-        // Shift+Tab: toggle all blocks based on current cursor block state
-        const targetState = !blocks[cursor].isOpen;
-        blocks.forEach(block => {
-          block.isOpen = targetState;
-        });
-      } else {
-        // Tab: toggle current block only
-        blocks[cursor].isOpen = !blocks[cursor].isOpen;
-      }
-      render();
-    }
-
-    if (key.name === "1") {
-      diffViewMode = "unified";
-      render();
-    }
-
-    if (key.name === "2") {
-      diffViewMode = "split";
-      render();
-    }
-
-    if (key.name === "f") {
-      followMode = !followMode;
-      render();
-    }
+    const handler = keyHandlers[key.name];
+    if (handler) handler(key);
   });
 
-  // Watch for file changes in the current directory
-  const gitDir = ".git";
-  const watcher = watch(".", { recursive: true }, (eventType, filename) => {
-    // Debounce rapid file changes
-    if (refreshTimeout) {
-      clearTimeout(refreshTimeout);
-    }
-    
-    refreshTimeout = setTimeout(() => {
-      refreshDiff();
-    }, LAYOUT.WATCH_DEBOUNCE_MS);
+  const watcher = watch(".", { recursive: true }, () => {
+    if (refreshTimeout) clearTimeout(refreshTimeout);
+    refreshTimeout = setTimeout(refreshDiff, LAYOUT.WATCH_DEBOUNCE_MS);
   });
 
-  // Cleanup on exit
-  process.on("beforeExit", () => {
-    watcher.close();
-  });
+  process.on("beforeExit", () => watcher.close());
 }
 
 main();
