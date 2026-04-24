@@ -5,6 +5,10 @@ import {
   TextRenderable,
   DiffRenderable,
   ScrollBoxRenderable,
+  SyntaxStyle,
+  RGBA,
+  getTreeSitterClient,
+  pathToFiletype,
   type KeyEvent,
   t,
   fg,
@@ -123,6 +127,50 @@ const LAYOUT = {
   WATCH_DEBOUNCE_MS: 500,
   RENAME_THRESHOLD: 0.6,
 } as const;
+
+// =============================================================================
+// Syntax Highlighting
+// =============================================================================
+
+const SYNTAX_STYLE = SyntaxStyle.fromStyles({
+  keyword:                { fg: RGBA.fromHex("#cf222e") },
+  "keyword.return":       { fg: RGBA.fromHex("#cf222e") },
+  "keyword.function":     { fg: RGBA.fromHex("#cf222e") },
+  "keyword.import":       { fg: RGBA.fromHex("#cf222e") },
+  "keyword.modifier":     { fg: RGBA.fromHex("#cf222e") },
+  "keyword.conditional":  { fg: RGBA.fromHex("#cf222e") },
+  "keyword.repeat":       { fg: RGBA.fromHex("#cf222e") },
+  "keyword.exception":    { fg: RGBA.fromHex("#cf222e") },
+  "keyword.operator":     { fg: RGBA.fromHex("#0550ae") },
+  "keyword.type":         { fg: RGBA.fromHex("#0550ae") },
+  string:                 { fg: RGBA.fromHex("#0a3069") },
+  "string.escape":        { fg: RGBA.fromHex("#0a3069") },
+  "string.regexp":        { fg: RGBA.fromHex("#116329") },
+  comment:                { fg: RGBA.fromHex("#6e7781"), italic: true },
+  "comment.documentation": { fg: RGBA.fromHex("#6e7781"), italic: true },
+  number:                 { fg: RGBA.fromHex("#0550ae") },
+  boolean:                { fg: RGBA.fromHex("#0550ae") },
+  function:               { fg: RGBA.fromHex("#6639ba") },
+  "function.call":        { fg: RGBA.fromHex("#6639ba") },
+  "function.method":      { fg: RGBA.fromHex("#6639ba") },
+  "function.method.call": { fg: RGBA.fromHex("#6639ba") },
+  "function.builtin":     { fg: RGBA.fromHex("#6639ba") },
+  type:                   { fg: RGBA.fromHex("#953800") },
+  "type.builtin":         { fg: RGBA.fromHex("#0550ae") },
+  constant:               { fg: RGBA.fromHex("#0550ae") },
+  "constant.builtin":     { fg: RGBA.fromHex("#0550ae") },
+  variable:               { fg: RGBA.fromHex("#24292f") },
+  "variable.member":      { fg: RGBA.fromHex("#24292f") },
+  "variable.parameter":   { fg: RGBA.fromHex("#24292f") },
+  "variable.builtin":     { fg: RGBA.fromHex("#6639ba") },
+  operator:               { fg: RGBA.fromHex("#24292f") },
+  constructor:            { fg: RGBA.fromHex("#953800") },
+  attribute:              { fg: RGBA.fromHex("#6e7781") },
+  module:                 { fg: RGBA.fromHex("#24292f") },
+  label:                  { fg: RGBA.fromHex("#0550ae") },
+});
+
+const treeSitterClient = getTreeSitterClient();
 
 // =============================================================================
 // Types
@@ -396,6 +444,7 @@ async function main() {
 
     if (block.isOpen) {
       const diffLines = block.file.rawDiff.split("\n").length;
+      const filetype = pathToFiletype(block.file.filename);
       const diffView = new DiffRenderable(renderer, {
         id: `diff-${index}`,
         width: "100%",
@@ -410,6 +459,9 @@ async function main() {
         addedSignColor: DIFF_COLORS.ADDED_SIGN,
         removedSignColor: DIFF_COLORS.REMOVED_SIGN,
         lineNumberFg: DIFF_COLORS.LINE_NUMBER_FG,
+        filetype,
+        syntaxStyle: SYNTAX_STYLE,
+        treeSitterClient,
         onMouseDown: () => {
           state.cursor = index;
           render();
