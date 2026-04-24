@@ -261,29 +261,45 @@ async function main() {
   let scrollBox: ScrollBoxRenderable | null = null;
   let footer: BoxRenderable | null = null;
   let diffViewMode: "unified" | "split" = "unified";
+  let followMode = true;
   let refreshTimeout: Timer | null = null;
 
   async function refreshDiff() {
     const newFiles = await getGitDiff();
-    
-    // Preserve cursor position and open/close states where possible
-    const oldFilenames = new Map(blocks.map((b, i) => [b.file.filename, { index: i, isOpen: b.isOpen }]));
-    
+
+    const oldState = new Map(blocks.map(b => [b.file.filename, b.file.rawDiff]));
+
     files = newFiles;
     blocks = newFiles.map((file) => {
-      const oldState = oldFilenames.get(file.filename);
+      const prev = oldState.get(file.filename);
       return {
         file,
-        isOpen: oldState?.isOpen ?? true,
+        isOpen: prev !== undefined ? (blocks.find(b => b.file.filename === file.filename)?.isOpen ?? true) : true,
       };
     });
 
-    // Adjust cursor if it's out of bounds
     if (cursor >= blocks.length) {
       cursor = Math.max(0, blocks.length - 1);
     }
 
+    // Find changed/new files for follow mode before re-render
+    const changedIndices = followMode
+      ? newFiles.reduce<number[]>((acc, file, i) => {
+          if (oldState.get(file.filename) !== file.rawDiff) {
+            blocks[i].isOpen = true;
+            acc.push(i);
+          }
+          return acc;
+        }, [])
+      : [];
+
     render();
+
+    if (followMode && changedIndices.length > 0 && scrollBox) {
+      const lastIdx = changedIndices[changedIndices.length - 1];
+      scrollBox.scrollChildIntoView(`header-${lastIdx}`);
+      cursor = lastIdx;
+    }
   }
 
   if (files.length === 0) {
@@ -409,10 +425,10 @@ async function main() {
       y: renderer.height - LAYOUT.FOOTER_HEIGHT,
     });
 
+    const followIndicator = followMode ? fg(COLORS.ADDED)("FOLLOW") : fg(COLORS.MUTED)("follow");
     const footerText = new TextRenderable(renderer, {
       id: "footer-text",
-      content: " j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  q: quit",
-      fg: COLORS.FOOTER_FG,
+      content: t`${fg(COLORS.FOOTER_FG)(" j/k: navigate  Tab: toggle  Shift+Tab: toggle all  1: unified  2: split  f: ")}${followIndicator}${fg(COLORS.FOOTER_FG)("  q: quit")}`,
     });
 
     footer.add(footerText);
@@ -458,6 +474,11 @@ async function main() {
 
     if (key.name === "2") {
       diffViewMode = "split";
+      render();
+    }
+
+    if (key.name === "f") {
+      followMode = !followMode;
       render();
     }
   });
