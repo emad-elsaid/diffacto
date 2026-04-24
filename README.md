@@ -25,18 +25,30 @@ bun install
 
 Run diffacto in any git repository:
 
-```bash
-./diffacto
 ```
+$ ./diffacto --help
+diffacto - A beautiful terminal UI for viewing git diffs
 
-### Keyboard Shortcuts
+Usage: diffacto [options]
 
-- **j/k** or **arrow keys**: Navigate between files
-- **Tab**: Toggle current file block
-- **Shift+Tab**: Toggle all file blocks
-- **1**: Switch to unified view
-- **2**: Switch to split view
-- **q**: Quit
+Options:
+  -h, --help        Show this help message
+  -s, --split       Start in split view mode (default: unified)
+  -u, --unified     Start in unified view mode (default)
+  -f, --follow      Enable follow mode - auto-scroll to changes (default)
+  -F, --no-follow   Disable follow mode
+  -c, --collapsed   Start with all file blocks collapsed
+  -e, --expanded    Start with all file blocks expanded (default)
+
+Keyboard Shortcuts:
+  j/k, ↑/↓          Navigate between files
+  Tab               Toggle current file block
+  Shift+Tab         Toggle all file blocks
+  1                 Switch to unified view
+  2                 Switch to split view
+  f                 Toggle follow mode
+  q                 Quit
+```
 
 ## Technical Details
 

@@ -10,7 +10,69 @@ import {
   fg,
 } from "@opentui/core";
 import { $ } from "bun";
+import { parseArgs } from "util";
 import { watch } from "fs";
+
+// =============================================================================
+// CLI Arguments
+// =============================================================================
+
+const HELP_TEXT = `
+diffacto - A beautiful terminal UI for viewing git diffs
+
+Usage: diffacto [options]
+
+Options:
+  -h, --help        Show this help message
+  -s, --split       Start in split view mode (default: unified)
+  -u, --unified     Start in unified view mode (default)
+  -f, --follow      Enable follow mode - auto-scroll to changes (default)
+  -F, --no-follow   Disable follow mode
+  -c, --collapsed   Start with all file blocks collapsed
+  -e, --expanded    Start with all file blocks expanded (default)
+
+Keyboard Shortcuts:
+  j/k, ↑/↓          Navigate between files
+  Tab               Toggle current file block
+  Shift+Tab         Toggle all file blocks
+  1                 Switch to unified view
+  2                 Switch to split view
+  f                 Toggle follow mode
+  q                 Quit
+`.trim();
+
+let args: Record<string, boolean>;
+try {
+  const parsed = parseArgs({
+    args: Bun.argv.slice(2),
+    options: {
+      help: { type: "boolean", short: "h", default: false },
+      split: { type: "boolean", short: "s", default: false },
+      unified: { type: "boolean", short: "u", default: false },
+      follow: { type: "boolean", short: "f", default: false },
+      "no-follow": { type: "boolean", short: "F", default: false },
+      collapsed: { type: "boolean", short: "c", default: false },
+      expanded: { type: "boolean", short: "e", default: false },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  args = parsed.values as Record<string, boolean>;
+} catch (e: any) {
+  console.error(`Error: ${e.message}\nRun 'diffacto --help' for usage.`);
+  process.exit(1);
+}
+
+if (args.help) {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
+
+const CONFIG = {
+  diffViewMode: args.split ? "split" : "unified" as "unified" | "split",
+  followMode: args["no-follow"] ? false : true,
+  startCollapsed: args.collapsed ? true : false,
+};
 
 // =============================================================================
 // Constants
@@ -282,10 +344,10 @@ async function main() {
     files: await getGitDiff(),
     blocks: [],
     cursor: 0,
-    diffViewMode: "unified",
-    followMode: true,
+    diffViewMode: CONFIG.diffViewMode,
+    followMode: CONFIG.followMode,
   };
-  state.blocks = state.files.map((file) => ({ file, isOpen: true }));
+  state.blocks = state.files.map((file) => ({ file, isOpen: !CONFIG.startCollapsed }));
 
   let scrollBox: ScrollBoxRenderable | null = null;
   let footer: BoxRenderable | null = null;
