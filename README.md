@@ -26,7 +26,7 @@ bun install
 Run diffacto in any git repository:
 
 ```bash
-bun run index.ts
+./diffacto
 ```
 
 ### Keyboard Shortcuts
@@ -45,4 +45,4 @@ Built with:
 - **UI Framework**: [OpenTUI](https://github.com/opentui/opentui) - Terminal UI framework using native Zig core
 - **Language**: TypeScript
 
-Single-file architecture (`index.ts`) with no build step required - Bun runs TypeScript directly.
+Single-file architecture (`diffacto`) with no build step required - Bun runs TypeScript directly.

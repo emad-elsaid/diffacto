@@ -1,6 +1,6 @@
 {
   "name": "diffacto",
-  "module": "index.ts",
+  "module": "diffacto",
   "type": "module",
   "private": true,
   "devDependencies": {

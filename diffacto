@@ -1,5 +1,6 @@
-import { 
-  createCliRenderer, 
+#!/usr/bin/env bun
+import {
+  createCliRenderer,
   BoxRenderable, 
   TextRenderable, 
   DiffRenderable, 
@@ -16,6 +17,7 @@ const COLORS = {
   ADDED: "#00ff00",
   DELETED: "#ff0000",
   MODIFIED: "#ffff00",
+  RENAMED: "#00bfff",
   MUTED: "#888888",
   HEADER_BG: "#1a1a1a",
   HEADER_BG_SELECTED: "#2a2a2a",
@@ -60,6 +62,7 @@ const LAYOUT = {
   FOOTER_HEIGHT: 1,
   FOOTER_PADDING: 1,
   WATCH_DEBOUNCE_MS: 200,
+  RENAME_THRESHOLD: 0.6,
 } as const;
 
 const EXIT_CODE = {
@@ -68,7 +71,8 @@ const EXIT_CODE = {
 
 interface FileDiff {
   filename: string;
-  status: "modified" | "added" | "deleted";
+  status: "modified" | "added" | "deleted" | "renamed";
+  renamedFrom?: string;
   additions: number;
   deletions: number;
   rawDiff: string;
@@ -79,22 +83,123 @@ interface FileBlock {
   isOpen: boolean;
 }
 
+function contentLines(rawDiff: string): Set<string> {
+  return new Set(
+    rawDiff.split("\n")
+      .filter(l => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++") && !l.startsWith("---"))
+      .map(l => l.slice(1))
+  );
+}
+
+function fileSimilarity(rawDiffA: string, rawDiffB: string): number {
+  const a = contentLines(rawDiffA);
+  const b = contentLines(rawDiffB);
+  const intersection = [...a].filter(l => b.has(l)).length;
+  return intersection / (a.size + b.size - intersection);
+}
+
+async function getRenamedDiff(delFilename: string, addFilename: string): Promise<string> {
+  try {
+    const oldContent = await $`git show HEAD:${delFilename}`.text();
+    const tmpPath = `/tmp/_diffacto_old_${Date.now()}`;
+    await Bun.write(tmpPath, oldContent);
+    try {
+      let diff = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} ${tmpPath} ${addFilename}`.nothrow().text();
+      // Replace temp path with real filename so the diff header reads correctly
+      diff = diff.replaceAll(tmpPath.slice(1), delFilename);
+      return diff;
+    } finally {
+      await $`rm -f ${tmpPath}`.nothrow();
+    }
+  } catch {
+    return "";
+  }
+}
+
+async function detectRenames(files: FileDiff[]): Promise<FileDiff[]> {
+  const deleted = files.filter(f => f.status === "deleted");
+  const added = files.filter(f => f.status === "added");
+
+  const renamedPairs = new Map<FileDiff, FileDiff>(); // deleted -> added
+  const claimedAdded = new Set<FileDiff>();
+
+  for (const del of deleted) {
+    let bestScore = LAYOUT.RENAME_THRESHOLD;
+    let bestMatch: FileDiff | null = null;
+    for (const add of added) {
+      if (claimedAdded.has(add)) continue;
+      const score = fileSimilarity(del.rawDiff, add.rawDiff);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = add;
+      }
+    }
+    if (bestMatch) {
+      renamedPairs.set(del, bestMatch);
+      claimedAdded.add(bestMatch);
+    }
+  }
+
+  if (renamedPairs.size === 0) return files;
+
+  const suppressed = new Set<FileDiff>();
+  const renamed: FileDiff[] = [];
+
+  for (const [del, add] of renamedPairs) {
+    suppressed.add(del);
+    suppressed.add(add);
+    const rawDiff = await getRenamedDiff(del.filename, add.filename);
+    const parsed = rawDiff ? parseDiff(rawDiff)[0] : null;
+    renamed.push({
+      filename: add.filename,
+      renamedFrom: del.filename,
+      status: "renamed",
+      additions: parsed?.additions ?? add.additions,
+      deletions: parsed?.deletions ?? add.deletions,
+      rawDiff: rawDiff || add.rawDiff,
+    });
+  }
+
+  return [...files.filter(f => !suppressed.has(f)), ...renamed];
+}
+
+async function getUntrackedDiffs(): Promise<FileDiff[]> {
+  try {
+    const statusOutput = await $`git status --porcelain`.text();
+    const untracked = statusOutput
+      .split("\n")
+      .filter(line => line.startsWith("?? "))
+      .map(line => line.slice(3).trim())
+      .filter(Boolean);
+
+    const results: FileDiff[] = [];
+    for (const file of untracked) {
+      // .nothrow() prevents Bun from throwing on exit code 1 (which git diff --no-index uses to signal differences)
+      const diffOutput = await $`git diff --no-index --unified=${LAYOUT.DIFF_CONTEXT_LINES} /dev/null ${file}`.nothrow().text();
+      if (diffOutput) results.push(...parseDiff(diffOutput));
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 async function getGitDiff(): Promise<FileDiff[]> {
   try {
-    // Get both staged and unstaged changes
-    const stagedOutput = await $`git diff --cached --unified=${LAYOUT.DIFF_CONTEXT_LINES}`.text();
-    const unstagedOutput = await $`git diff --unified=${LAYOUT.DIFF_CONTEXT_LINES}`.text();
-    
+    const [stagedOutput, unstagedOutput, untrackedFiles] = await Promise.all([
+      $`git diff --cached --unified=${LAYOUT.DIFF_CONTEXT_LINES}`.text(),
+      $`git diff --unified=${LAYOUT.DIFF_CONTEXT_LINES}`.text(),
+      getUntrackedDiffs(),
+    ]);
+
     const stagedFiles = stagedOutput ? parseDiff(stagedOutput) : [];
     const unstagedFiles = unstagedOutput ? parseDiff(unstagedOutput) : [];
-    
-    // Merge files with same name
+
     const fileMap = new Map<string, FileDiff>();
-    
-    for (const file of [...stagedFiles, ...unstagedFiles]) {
+
+    for (const file of [...stagedFiles, ...unstagedFiles, ...untrackedFiles]) {
       const existing = fileMap.get(file.filename);
       if (existing) {
-        // Merge the diffs for the same file
         existing.additions += file.additions;
         existing.deletions += file.deletions;
         existing.rawDiff += "\n" + file.rawDiff;
@@ -102,8 +207,8 @@ async function getGitDiff(): Promise<FileDiff[]> {
         fileMap.set(file.filename, file);
       }
     }
-    
-    return Array.from(fileMap.values());
+
+    return await detectRenames(Array.from(fileMap.values()));
   } catch (error) {
     return [];
   }
@@ -212,16 +317,19 @@ async function main() {
       const block = blocks[i];
       const isCursor = i === cursor;
       const arrow = block.isOpen ? SYMBOLS.ARROW_OPEN : SYMBOLS.ARROW_CLOSED;
-      const statusColor = 
-        block.file.status === "added" ? COLORS.ADDED : 
-        block.file.status === "deleted" ? COLORS.DELETED : 
+      const statusColor =
+        block.file.status === "added" ? COLORS.ADDED :
+        block.file.status === "deleted" ? COLORS.DELETED :
+        block.file.status === "renamed" ? COLORS.RENAMED :
         COLORS.MODIFIED;
 
       const headerBg = isCursor ? COLORS.HEADER_BG_SELECTED : COLORS.HEADER_BG;
 
-      // Calculate padding to align stats to the right
       const termWidth = renderer.width;
-      const leftPart = `${arrow} ${block.file.filename}`;
+      const fileLabel = block.file.renamedFrom
+        ? `${block.file.renamedFrom} → ${block.file.filename}`
+        : block.file.filename;
+      const leftPart = `${arrow} ${fileLabel}`;
       const additions = `+${block.file.additions}`;
       const deletions = `-${block.file.deletions}`;
       const statsText = `${additions} ${deletions}`;
