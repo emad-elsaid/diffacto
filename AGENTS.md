@@ -13,16 +13,17 @@ Terminal UI application for viewing git diffs using OpenTUI and Bun.
 ## Key Commands
 
 ```bash
-bun run index.ts          # Run the diff viewer
+./diffacto                # Run the diff viewer (executable file)
 bun install               # Install dependencies
 git diff --unified=3      # Generate diff output (used internally)
 ```
 
 ## Architecture
 
-- Single-file application: `index.ts`
+- Single-file application: `diffacto` (executable TypeScript file)
 - No build step required - Bun runs TypeScript directly
 - OpenTUI renders TUI in the terminal using native Zig core
+- File watcher monitors changes with debouncing and filtering
 
 ## OpenTUI Critical Patterns
 
@@ -127,3 +128,7 @@ Apply this to:
 - Single file viewer showing collapsible file blocks
 - Arrow keys navigate, Tab toggles, q quits
 - Stats (+/-) must be color-coded and right-aligned using dynamic terminal width
+- File watcher uses 500ms debounce and filters `.git/` directory changes to prevent flicker
+- Re-rendering only occurs when diff content actually changes
+- Empty state properly transitions to/from non-empty state with component cleanup
+
