@@ -120,7 +120,7 @@ const LAYOUT = {
   MIN_PADDING: 1,
   FOOTER_HEIGHT: 1,
   FOOTER_PADDING: 1,
-  WATCH_DEBOUNCE_MS: 200,
+  WATCH_DEBOUNCE_MS: 500,
   RENAME_THRESHOLD: 0.6,
 } as const;
 
@@ -474,6 +474,16 @@ async function main() {
   async function refreshDiff() {
     const newFiles = await getGitDiff();
     const oldState = new Map(state.blocks.map((b) => [b.file.filename, { rawDiff: b.file.rawDiff, isOpen: b.isOpen }]));
+    const wasEmpty = state.files.length === 0;
+
+    // Check if anything actually changed to avoid unnecessary re-renders
+    if (state.files.length === newFiles.length && state.files.length > 0) {
+      const allUnchanged = state.files.every((oldFile) => {
+        const newFile = newFiles.find((f) => f.filename === oldFile.filename);
+        return newFile && newFile.rawDiff === oldFile.rawDiff;
+      });
+      if (allUnchanged) return; // No changes detected, skip re-render
+    }
 
     state.files = newFiles;
     state.blocks = newFiles.map((file) => ({
@@ -495,12 +505,34 @@ async function main() {
         }, [])
       : [];
 
-    render();
+    // Clear existing UI elements when transitioning between empty and non-empty states
+    if (wasEmpty && newFiles.length > 0) {
+      // Transitioning from empty to non-empty state - destroy empty state container
+      if (emptyContainer) {
+        emptyContainer.destroy();
+        emptyContainer = null;
+      }
+    } else if (!wasEmpty && newFiles.length === 0) {
+      // Transitioning from non-empty to empty state - destroy scroll and footer
+      if (scrollBox) {
+        scrollBox.destroy();
+        scrollBox = null;
+      }
+      if (footer) {
+        footer.destroy();
+        footer = null;
+      }
+    }
 
-    if (state.followMode && changedIndices.length > 0 && scrollBox) {
-      const lastIdx = changedIndices[changedIndices.length - 1];
-      scrollBox.scrollChildIntoView(`header-${lastIdx}`);
-      state.cursor = lastIdx;
+    if (newFiles.length === 0) {
+      renderEmptyState();
+    } else {
+      render();
+      if (state.followMode && changedIndices.length > 0 && scrollBox) {
+        const lastIdx = changedIndices[changedIndices.length - 1];
+        scrollBox.scrollChildIntoView(`header-${lastIdx}`);
+        state.cursor = lastIdx;
+      }
     }
   }
 
@@ -550,8 +582,15 @@ async function main() {
   // Initialization
   // ---------------------------------------------------------------------------
 
-  if (state.files.length === 0) {
-    const container = new BoxRenderable(renderer, {
+  let emptyContainer: BoxRenderable | null = null;
+
+  function renderEmptyState() {
+    // Clean up existing empty container if it exists
+    if (emptyContainer) {
+      emptyContainer.destroy();
+    }
+
+    emptyContainer = new BoxRenderable(renderer, {
       id: "empty",
       padding: LAYOUT.EMPTY_STATE_PADDING,
       flexDirection: "column",
@@ -561,19 +600,26 @@ async function main() {
       content: "No changes to display",
       fg: COLORS.MUTED,
     });
-    container.add(text);
-    renderer.root.add(container);
-    return;
+    emptyContainer.add(text);
+    renderer.root.add(emptyContainer);
   }
 
-  render();
+  if (state.files.length === 0) {
+    renderEmptyState();
+  } else {
+    render();
+  }
 
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
     const handler = keyHandlers[key.name];
     if (handler) handler(key);
   });
 
-  const watcher = watch(".", { recursive: true }, () => {
+  const watcher = watch(".", { recursive: true }, (event, filename) => {
+    // Ignore changes in .git directory to reduce noise
+    if (filename && (filename.startsWith('.git/') || filename.includes('/.git/'))) {
+      return;
+    }
     if (refreshTimeout) clearTimeout(refreshTimeout);
     refreshTimeout = setTimeout(refreshDiff, LAYOUT.WATCH_DEBOUNCE_MS);
   });
