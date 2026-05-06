@@ -1,5 +1,8 @@
 # diffacto
 
+Archived, use [Hunk](https://github.com/modem-dev/hunk)
+instead
+
 ![Screenshot](screenshot.png)
 
 A beautiful terminal UI application for viewing git diffs with an interactive, collapsible interface.
